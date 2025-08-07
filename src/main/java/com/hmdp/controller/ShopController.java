@@ -57,8 +57,11 @@ public class ShopController {
     @PutMapping
     public Result updateShop(@RequestBody Shop shop) {
         // 写入数据库
-        shopService.updateById(shop);
-        return Result.ok();
+//        shopService.updateById(shop);
+//        return Result.ok();
+
+        // 采用redis来更新，并实现数据库和缓存的一致性问题
+        return shopService.update(shop);
     }
 
     /**
