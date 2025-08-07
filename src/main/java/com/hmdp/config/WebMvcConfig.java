@@ -20,8 +20,10 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
 
+        // 拦截所有请求
         registry.addInterceptor(refreshTokenInterception)
-                .excludePathPatterns("/**");
+                .addPathPatterns("/**");
+
 
         registry.addInterceptor(loginInterceptor)
                 .excludePathPatterns("/user/login",
