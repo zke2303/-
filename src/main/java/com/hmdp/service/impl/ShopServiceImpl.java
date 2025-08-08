@@ -1,13 +1,20 @@
 package com.hmdp.service.impl;
 
+import ch.qos.logback.core.util.TimeUtil;
+import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisConstants;
+import com.hmdp.utils.RedisData;
+import com.sun.org.apache.xpath.internal.operations.Bool;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -15,6 +22,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import javax.naming.ldap.Rdn;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 
@@ -27,14 +40,22 @@ import java.util.concurrent.TimeUnit;
  * @since 2021-12-22
  */
 @Service
+@Slf4j
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
     private StringRedisTemplate stringRedisTemplate;
 
+    private CacheClient cacheClient;
+
     @Autowired
-    public ShopServiceImpl(StringRedisTemplate stringRedisTemplate){
+    public ShopServiceImpl(StringRedisTemplate stringRedisTemplate
+    , CacheClient cacheClient){
         this.stringRedisTemplate = stringRedisTemplate;
+        this.cacheClient = cacheClient;
     }
+
+
+
 
     /**
      * 根据id查询商铺信息, 用过redis来实现
@@ -42,27 +63,18 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      * @return 商铺详情数据
      */
     @Override
-    public Result queryById(Long id) {
-        // 1.从redis中查询商铺缓存
-        String key = RedisConstants.CACHE_SHOP_KEY + id;
-        String shopJson = stringRedisTemplate.opsForValue().get(key);
-        // 2.判断是否存在
-        if (!StrUtil.isBlank(shopJson)){
-            // 存在，直接返回结果
-            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
-            return Result.ok(shop);
-        }
-        // 3.如果在redis中不存在，在数据库中查询
-        Shop shop = getById(id);
+    public Result queryById(Long id) throws InterruptedException {
+        Shop shop = cacheClient.queryWithLogicalExpire(RedisConstants.CACHE_SHOP_KEY,
+                id,
+                Shop.class,
+                this::getById,
+                RedisConstants.CACHE_SHOP_TTL,
+                TimeUnit.MINUTES);
 
-        // 4.判断是否存在
         if (shop == null) {
-            // 如果在数据库中，不存在，则证明没有这个数据，返回错误信息
-            return Result.fail("店铺不存在！");
+            return Result.fail("店铺不存在!");
         }
 
-        // 如果数据库中存在，把这个信息存入redis中, 添加过期时间
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(shop), RedisConstants.CACHE_SHOP_TTL, TimeUnit.SECONDS);
         return Result.ok(shop);
     }
 
@@ -84,5 +96,25 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         String key = RedisConstants.CACHE_SHOP_KEY + shop.getId();
         stringRedisTemplate.delete(key);
         return Result.ok(shop);
+    }
+
+
+    /**
+     * 将shop对象保存到redis中，并添加logical expired
+     * @param id 店铺id
+     * @param time 逻辑过期时间
+     * @param timeUnit 时间单位
+     */
+    @Override
+    public void saveShopWithLogicalExpired(Long id, Long time, TimeUnit timeUnit) {
+        // 1.查询数据库
+        Shop shop = getById(id);
+        // 2.封装成RedisData对象
+        RedisData redisData = RedisData.builder()
+                .data(shop)
+                .expireTime(LocalDateTime.now().plusSeconds(timeUnit.toSeconds(time)))
+                .build();
+        String key = RedisConstants.CACHE_SHOP_KEY + shop.getId();
+        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
     }
 }
